@@ -1,0 +1,471 @@
+using System;
+using System.Collections.Generic;
+using UnityEditor;
+using UnityEngine;
+using UnityEngine.UI;
+
+public class ClickHelperPopup : EditorWindow
+{
+    private static readonly Type[] DetectableTypes = new Type[]
+    {
+        typeof(MeshRenderer),
+        typeof(SkinnedMeshRenderer),
+        typeof(SpriteRenderer),
+        typeof(MeshFilter),
+        typeof(Terrain),
+        typeof(ParticleSystemRenderer),
+        typeof(Collider),
+        typeof(Collider2D),
+        typeof(Canvas),
+        typeof(CanvasRenderer),
+        typeof(RectTransform),
+        typeof(Image),
+        typeof(RawImage),
+        typeof(Text),
+        typeof(Button),
+        typeof(Toggle),
+        typeof(Slider),
+        typeof(Scrollbar),
+        typeof(Dropdown),
+        typeof(InputField),
+        typeof(ScrollRect),
+        typeof(Mask),
+        typeof(RectMask2D),
+        typeof(LayoutGroup),
+        typeof(Graphic),
+    };
+
+    private class Entry
+    {
+        public GameObject gameObject;
+        public List<Component> components = new List<Component>();
+        public bool expanded = true;
+    }
+
+    private List<Entry> _entries;
+    private int _hoveredIndex = -1;
+    private int _totalRows;
+    private Vector2 _scrollPos;
+
+    private const float RowHeight = 22f;
+    private const float WindowWidth = 360f;
+    private const float MaxVisibleRows = 18f;
+    private const float IconSize = 16f;
+    private const float IndentWidth = 20f;
+
+    private static GUIStyle _rowStyle;
+    private static GUIStyle _rowHoverStyle;
+    private static GUIStyle _labelStyle;
+    private static GUIStyle _componentLabelStyle;
+    private static GUIStyle _tagStyle;
+    private static GUIStyle _selectAllStyle;
+
+    public static event Action<GameObject> OnHighlightRequested;
+    public static event Action OnHighlightCleared;
+
+    public static ClickHelperPopup Show(Vector2 screenPos, List<GameObject> objects)
+    {
+        var window = CreateInstance<ClickHelperPopup>();
+        window.BuildEntries(objects);
+
+        int rowCount = 1;
+        foreach (var entry in window._entries)
+            rowCount += 1 + entry.components.Count;
+        window._totalRows = rowCount;
+
+        float height = Mathf.Min(rowCount, MaxVisibleRows) * RowHeight + 4f;
+        window.ShowAsDropDown(new Rect(screenPos, Vector2.zero), new Vector2(WindowWidth, height));
+        window.Focus();
+        return window;
+    }
+
+    private void BuildEntries(List<GameObject> objects)
+    {
+        _entries = new List<Entry>();
+        foreach (var go in objects)
+        {
+            if (go == null) continue;
+            var entry = new Entry { gameObject = go };
+
+            foreach (var type in DetectableTypes)
+            {
+                if (typeof(Component).IsAssignableFrom(type))
+                {
+                    var comps = go.GetComponents(type);
+                    foreach (var c in comps)
+                    {
+                        if (c != null && !entry.components.Contains(c))
+                            entry.components.Add(c);
+                    }
+                }
+            }
+
+            _entries.Add(entry);
+        }
+    }
+
+    private void OnEnable()
+    {
+        wantsMouseMove = true;
+    }
+
+    private void OnDisable()
+    {
+        OnHighlightCleared?.Invoke();
+    }
+
+    private void InitStyles()
+    {
+        if (_rowStyle != null) return;
+
+        _rowStyle = new GUIStyle(GUIStyle.none)
+        {
+            padding = new RectOffset(6, 6, 2, 2),
+            fixedHeight = RowHeight
+        };
+
+        _rowHoverStyle = new GUIStyle(_rowStyle);
+        var hoverTex = new Texture2D(1, 1);
+        hoverTex.SetPixel(0, 0, new Color(0.24f, 0.48f, 0.9f, 0.6f));
+        hoverTex.Apply();
+        _rowHoverStyle.normal.background = hoverTex;
+
+        _labelStyle = new GUIStyle(EditorStyles.label)
+        {
+            fontSize = 12,
+            alignment = TextAnchor.MiddleLeft,
+            richText = true
+        };
+
+        _componentLabelStyle = new GUIStyle(EditorStyles.miniLabel)
+        {
+            fontSize = 11,
+            alignment = TextAnchor.MiddleLeft,
+            normal = { textColor = new Color(0.7f, 0.8f, 0.9f) }
+        };
+
+        _tagStyle = new GUIStyle(EditorStyles.miniLabel)
+        {
+            fontSize = 10,
+            alignment = TextAnchor.MiddleRight,
+            normal = { textColor = new Color(0.55f, 0.55f, 0.55f) }
+        };
+
+        _selectAllStyle = new GUIStyle(EditorStyles.miniButton)
+        {
+            fontSize = 11,
+            fixedHeight = RowHeight,
+            alignment = TextAnchor.MiddleCenter
+        };
+    }
+
+    private void OnGUI()
+    {
+        if (_entries == null || _entries.Count == 0)
+        {
+            Close();
+            return;
+        }
+
+        InitStyles();
+        HandleKeyboard();
+
+        _scrollPos = EditorGUILayout.BeginScrollView(_scrollPos);
+
+        DrawSelectAllRow();
+
+        int flatIndex = 0;
+        for (int i = 0; i < _entries.Count; i++)
+        {
+            var entry = _entries[i];
+            if (entry.gameObject == null) continue;
+
+            DrawGameObjectRow(entry, flatIndex);
+            flatIndex++;
+
+            if (ClickHelperSettings.ShowComponents && entry.expanded)
+            {
+                for (int j = 0; j < entry.components.Count; j++)
+                {
+                    DrawComponentRow(entry.components[j], entry.gameObject, flatIndex);
+                    flatIndex++;
+                }
+            }
+        }
+
+        EditorGUILayout.EndScrollView();
+
+        if (Event.current.type == EventType.MouseMove)
+            Repaint();
+    }
+
+    private void DrawSelectAllRow()
+    {
+        Rect rowRect = EditorGUILayout.BeginHorizontal(_rowStyle, GUILayout.Height(RowHeight));
+
+        if (GUILayout.Button("Select All (" + _entries.Count + ")", _selectAllStyle))
+        {
+            List<UnityEngine.Object> all = new List<UnityEngine.Object>();
+            foreach (var entry in _entries)
+            {
+                if (entry.gameObject != null)
+                    all.Add(entry.gameObject);
+            }
+            Selection.objects = all.ToArray();
+            if (ClickHelperSettings.Behavior == SelectionBehavior.SelectAndFocus)
+                SceneView.lastActiveSceneView?.FrameSelected();
+            Close();
+            return;
+        }
+
+        EditorGUILayout.EndHorizontal();
+    }
+
+    private void DrawGameObjectRow(Entry entry, int flatIndex)
+    {
+        bool isHovered = flatIndex == _hoveredIndex;
+        Rect rowRect = EditorGUILayout.BeginHorizontal(
+            isHovered ? _rowHoverStyle : _rowStyle,
+            GUILayout.Height(RowHeight));
+
+        var icon = EditorGUIUtility.ObjectContent(entry.gameObject, typeof(GameObject)).image;
+        if (icon != null)
+        {
+            Rect iconRect = GUILayoutUtility.GetRect(IconSize, IconSize,
+                GUILayout.Width(IconSize), GUILayout.Height(IconSize));
+            iconRect.y += (RowHeight - IconSize) * 0.5f;
+            GUI.DrawTexture(iconRect, icon, ScaleMode.ScaleToFit);
+            GUILayout.Space(2);
+        }
+
+        GUILayout.Label(entry.gameObject.name, _labelStyle, GUILayout.ExpandWidth(true));
+        //GUILayout.FlexibleSpace();
+        //GUILayout.Label(GetPrimaryTag(entry.gameObject), _tagStyle);
+
+        EditorGUILayout.EndHorizontal();
+
+        HandleRowMouse(rowRect, flatIndex, () =>
+        {
+            OnHighlightRequested?.Invoke(entry.gameObject);
+        }, () =>
+        {
+            if (entry.components.Count > 0)
+                entry.expanded = !entry.expanded;
+
+            Selection.activeGameObject = entry.gameObject;
+            EditorGUIUtility.PingObject(entry.gameObject);
+            if (ClickHelperSettings.Behavior == SelectionBehavior.SelectAndFocus)
+                SceneView.lastActiveSceneView?.FrameSelected();
+            Close();
+        });
+    }
+
+    private void DrawComponentRow(Component component, GameObject parent, int flatIndex)
+    {
+        if (component == null) return;
+
+        bool isHovered = flatIndex == _hoveredIndex;
+        Rect rowRect = EditorGUILayout.BeginHorizontal(
+            isHovered ? _rowHoverStyle : _rowStyle,
+            GUILayout.Height(RowHeight));
+
+        GUILayout.Space(IndentWidth);
+
+        var icon = EditorGUIUtility.ObjectContent(component, component.GetType()).image;
+        if (icon != null)
+        {
+            Rect iconRect = GUILayoutUtility.GetRect(IconSize, IconSize,
+                GUILayout.Width(IconSize), GUILayout.Height(IconSize));
+            iconRect.y += (RowHeight - IconSize) * 0.5f;
+            GUI.DrawTexture(iconRect, icon, ScaleMode.ScaleToFit);
+            GUILayout.Space(2);
+        }
+
+        GUILayout.Label(ObjectNames.NicifyVariableName(component.GetType().Name),
+            _componentLabelStyle, GUILayout.ExpandWidth(true));
+
+        EditorGUILayout.EndHorizontal();
+
+        HandleRowMouse(rowRect, flatIndex, () =>
+        {
+            OnHighlightRequested?.Invoke(parent);
+        }, () =>
+        {
+            Selection.activeGameObject = parent;
+            EditorApplication.delayCall += () =>
+            {
+                EditorUtility.OpenPropertyEditor(component);
+            };
+            Close();
+        });
+    }
+
+    private void HandleRowMouse(Rect rect, int flatIndex, Action onHover, Action onClick)
+    {
+        if (Event.current.type == EventType.MouseMove && rect.Contains(Event.current.mousePosition))
+        {
+            if (_hoveredIndex != flatIndex)
+            {
+                _hoveredIndex = flatIndex;
+                onHover?.Invoke();
+                Repaint();
+            }
+        }
+
+        if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
+        {
+            Event.current.Use();
+            onClick?.Invoke();
+        }
+    }
+
+    private void HandleKeyboard()
+    {
+        Event e = Event.current;
+        if (e.type != EventType.KeyDown) return;
+
+        int maxIndex = _totalRows - 2;
+
+        switch (e.keyCode)
+        {
+            case KeyCode.DownArrow:
+                _hoveredIndex = Mathf.Min(_hoveredIndex + 1, maxIndex);
+                HighlightAtFlatIndex(_hoveredIndex);
+                ScrollToIndex(_hoveredIndex);
+                e.Use();
+                Repaint();
+                break;
+
+            case KeyCode.UpArrow:
+                _hoveredIndex = Mathf.Max(_hoveredIndex - 1, 0);
+                HighlightAtFlatIndex(_hoveredIndex);
+                ScrollToIndex(_hoveredIndex);
+                e.Use();
+                Repaint();
+                break;
+
+            case KeyCode.Return:
+            case KeyCode.KeypadEnter:
+                if (e.shift)
+                {
+                    List<UnityEngine.Object> all = new List<UnityEngine.Object>();
+                    foreach (var entry in _entries)
+                    {
+                        if (entry.gameObject != null)
+                            all.Add(entry.gameObject);
+                    }
+                    Selection.objects = all.ToArray();
+                    if (ClickHelperSettings.Behavior == SelectionBehavior.SelectAndFocus)
+                        SceneView.lastActiveSceneView?.FrameSelected();
+                }
+                else
+                {
+                    SelectAtFlatIndex(_hoveredIndex);
+                }
+                e.Use();
+                Close();
+                break;
+
+            case KeyCode.Escape:
+                e.Use();
+                Close();
+                break;
+        }
+    }
+
+    private void HighlightAtFlatIndex(int flatIndex)
+    {
+        int idx = 0;
+        foreach (var entry in _entries)
+        {
+            if (idx == flatIndex)
+            {
+                OnHighlightRequested?.Invoke(entry.gameObject);
+                return;
+            }
+            idx++;
+            if (entry.expanded)
+            {
+                foreach (var comp in entry.components)
+                {
+                    if (idx == flatIndex)
+                    {
+                        OnHighlightRequested?.Invoke(entry.gameObject);
+                        return;
+                    }
+                    idx++;
+                }
+            }
+        }
+    }
+
+    private void SelectAtFlatIndex(int flatIndex)
+    {
+        int idx = 0;
+        foreach (var entry in _entries)
+        {
+            if (idx == flatIndex)
+            {
+                Selection.activeGameObject = entry.gameObject;
+                EditorGUIUtility.PingObject(entry.gameObject);
+                if (ClickHelperSettings.Behavior == SelectionBehavior.SelectAndFocus)
+                    SceneView.lastActiveSceneView?.FrameSelected();
+                return;
+            }
+            idx++;
+            if (entry.expanded)
+            {
+                for (int j = 0; j < entry.components.Count; j++)
+                {
+                    if (idx == flatIndex)
+                    {
+                        Selection.activeGameObject = entry.gameObject;
+                        var comp = entry.components[j];
+                        EditorApplication.delayCall += () =>
+                        {
+                            EditorUtility.OpenPropertyEditor(comp);
+                        };
+                        return;
+                    }
+                    idx++;
+                }
+            }
+        }
+    }
+
+    private void ScrollToIndex(int index)
+    {
+        float targetY = (index + 1) * RowHeight;
+        float viewHeight = Mathf.Min(_totalRows, MaxVisibleRows) * RowHeight;
+
+        if (targetY < _scrollPos.y)
+            _scrollPos.y = targetY;
+        else if (targetY + RowHeight > _scrollPos.y + viewHeight)
+            _scrollPos.y = targetY + RowHeight - viewHeight;
+    }
+
+    private string GetPrimaryTag(GameObject go)
+    {
+        if (go.TryGetComponent<Canvas>(out _)) return "Canvas";
+        if (go.TryGetComponent<Button>(out _)) return "Button";
+        if (go.TryGetComponent<Toggle>(out _)) return "Toggle";
+        if (go.TryGetComponent<Slider>(out _)) return "Slider";
+        if (go.TryGetComponent<Dropdown>(out _)) return "Dropdown";
+        if (go.TryGetComponent<InputField>(out _)) return "InputField";
+        if (go.TryGetComponent<ScrollRect>(out _)) return "ScrollRect";
+        if (go.TryGetComponent<Image>(out _)) return "Image";
+        if (go.TryGetComponent<RawImage>(out _)) return "RawImage";
+        if (go.TryGetComponent<Text>(out _)) return "Text";
+        if (go.TryGetComponent<CanvasRenderer>(out _)) return "UI";
+        if (go.TryGetComponent<RectTransform>(out _) && go.GetComponentInParent<Canvas>() != null)
+            return "UI";
+        if (go.TryGetComponent<SpriteRenderer>(out _)) return "Sprite";
+        if (go.TryGetComponent<SkinnedMeshRenderer>(out _)) return "Skinned Mesh";
+        if (go.TryGetComponent<MeshFilter>(out _)) return "Mesh";
+        if (go.TryGetComponent<Terrain>(out _)) return "Terrain";
+        if (go.TryGetComponent<ParticleSystem>(out _)) return "Particle";
+        if (go.TryGetComponent<Camera>(out _)) return "Camera";
+        if (go.TryGetComponent<Light>(out _)) return "Light";
+        return "";
+    }
+}
