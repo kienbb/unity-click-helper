@@ -4,7 +4,7 @@
 
 A powerful Unity Editor tool designed to simplify selecting overlapping objects in the Scene View. No more struggling to click the right object when multiple GameObjects or UI elements are stacked on top of each other.
 
-![Click Helper](https://via.placeholder.com/800x400?text=Click+Helper+Preview)
+![Click Helper Preview](Media/gameobject_mix_2d_3d_click.png)
 
 ## Features
 
@@ -15,6 +15,8 @@ A powerful Unity Editor tool designed to simplify selecting overlapping objects 
 - **Scene View Integration**: Includes a convenient Overlay toolbar for quick toggling and settings access.
 - **Layer Filtering**: Exclude specific layers from being picked to focus only on what matters.
 - **UI Support**: Works seamlessly with both 3D objects and 2D UI elements (Canvas, RectTransform).
+
+![UI Interaction](Media/ui_click.png)
 
 ## Installation
 
@@ -63,6 +65,8 @@ The tool adds a **Click Helper** overlay to your Scene View toolbar.
   - **Selection Behavior**: Choose between "Select Only" or "Select and Focus".
   - **Show Components**: Toggle component display in the popup.
   - **Excluded Layers**: Filter out layers you don't want to select (e.g., "Ignore Raycast").
+
+![Settings Panel](Media/click_helper_settings.png)
 
 ## Requirements
 
