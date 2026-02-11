@@ -53,7 +53,6 @@ public class ClickHelperPopup : EditorWindow
     private const float RowHeight = 22f;
     private const float LeftPanelWidth = 220f;
     private const float RightPanelWidth = 250f;
-    private const float WindowWidth = LeftPanelWidth + RightPanelWidth;
     private const float MaxVisibleRows = 20f;
     private const float IconSize = 16f;
 
@@ -76,9 +75,13 @@ public class ClickHelperPopup : EditorWindow
         if (rowCount < 8) rowCount = 8; // Min height
 
         float height = Mathf.Min(rowCount, MaxVisibleRows) * RowHeight;
+        
+        // Calculate dynamic width based on ShowComponents setting
+        bool showComponents = ClickHelperSettings.ShowComponents;
+        float windowWidth = showComponents ? (LeftPanelWidth + RightPanelWidth) : LeftPanelWidth;
 
         // Position slightly offset to not cover the mouse immediately if possible
-        window.ShowAsDropDown(new Rect(screenPos, Vector2.zero), new Vector2(WindowWidth, height));
+        window.ShowAsDropDown(new Rect(screenPos, Vector2.zero), new Vector2(windowWidth, height));
         window.Focus();
 
         // Highlight first item by default if available
@@ -94,20 +97,26 @@ public class ClickHelperPopup : EditorWindow
     private void BuildEntries(List<GameObject> objects)
     {
         _entries = new List<Entry>();
+        bool showComponents = ClickHelperSettings.ShowComponents;
+
         foreach (var go in objects)
         {
             if (go == null) continue;
             var entry = new Entry { gameObject = go };
 
-            foreach (var type in DetectableTypes)
+            // Optimization: Only scan for components if the feature is enabled
+            if (showComponents)
             {
-                if (typeof(Component).IsAssignableFrom(type))
+                foreach (var type in DetectableTypes)
                 {
-                    var comps = go.GetComponents(type);
-                    foreach (var c in comps)
+                    if (typeof(Component).IsAssignableFrom(type))
                     {
-                        if (c != null && !entry.components.Contains(c))
-                            entry.components.Add(c);
+                        var comps = go.GetComponents(type);
+                        foreach (var c in comps)
+                        {
+                            if (c != null && !entry.components.Contains(c))
+                                entry.components.Add(c);
+                        }
                     }
                 }
             }
@@ -186,8 +195,12 @@ public class ClickHelperPopup : EditorWindow
 
         GUILayout.BeginHorizontal();
 
+        bool showComponents = ClickHelperSettings.ShowComponents;
+        // If not showing components, expand left panel to full window width (which is also smaller now)
+        float leftWidth = showComponents ? LeftPanelWidth : position.width;
+
         // --- Left Panel: GameObjects ---
-        GUILayout.BeginVertical(GUILayout.Width(LeftPanelWidth));
+        GUILayout.BeginVertical(GUILayout.Width(leftWidth));
         
         _scrollPosLeft = GUILayout.BeginScrollView(_scrollPosLeft, GUIStyle.none, GUI.skin.verticalScrollbar);
 
@@ -201,38 +214,42 @@ public class ClickHelperPopup : EditorWindow
         GUILayout.EndScrollView();
         GUILayout.EndVertical();
 
-        // Separator Line
-        GUILayout.Box("", _separatorStyle, GUILayout.Width(1), GUILayout.ExpandHeight(true));
-
-        // --- Right Panel: Components ---
-        GUILayout.BeginVertical(GUILayout.ExpandWidth(true));
-        
-        _scrollPosRight = GUILayout.BeginScrollView(_scrollPosRight, GUIStyle.none, GUI.skin.verticalScrollbar);
-
-        if (_selectedLeftIndex >= 0 && _selectedLeftIndex < _entries.Count)
+        // --- Render Right Panel ONLY if enabled ---
+        if (showComponents)
         {
-            var activeEntry = _entries[_selectedLeftIndex];
-            if (activeEntry.components.Count > 0)
+            // Separator Line
+            GUILayout.Box("", _separatorStyle, GUILayout.Width(1), GUILayout.ExpandHeight(true));
+
+            // --- Right Panel: Components ---
+            GUILayout.BeginVertical(GUILayout.ExpandWidth(true));
+            
+            _scrollPosRight = GUILayout.BeginScrollView(_scrollPosRight, GUIStyle.none, GUI.skin.verticalScrollbar);
+
+            if (_selectedLeftIndex >= 0 && _selectedLeftIndex < _entries.Count)
             {
-                for (int i = 0; i < activeEntry.components.Count; i++)
+                var activeEntry = _entries[_selectedLeftIndex];
+                if (activeEntry.components.Count > 0)
                 {
-                    DrawRightPanelRow(activeEntry.components[i], activeEntry.gameObject, i);
+                    for (int i = 0; i < activeEntry.components.Count; i++)
+                    {
+                        DrawRightPanelRow(activeEntry.components[i], activeEntry.gameObject, i);
+                    }
+                }
+                else
+                {
+                    GUILayout.Space(20);
+                    GUILayout.Label("No Components", EditorStyles.centeredGreyMiniLabel);
                 }
             }
-            else
+            else if (_selectedLeftIndex == -1) // Select All
             {
                 GUILayout.Space(20);
-                GUILayout.Label("No Components", EditorStyles.centeredGreyMiniLabel);
+                GUILayout.Label("Multiple Selection", EditorStyles.centeredGreyMiniLabel);
             }
-        }
-        else if (_selectedLeftIndex == -1) // Select All
-        {
-            GUILayout.Space(20);
-            GUILayout.Label("Multiple Selection", EditorStyles.centeredGreyMiniLabel);
-        }
 
-        GUILayout.EndScrollView();
-        GUILayout.EndVertical();
+            GUILayout.EndScrollView();
+            GUILayout.EndVertical();
+        }
 
         GUILayout.EndHorizontal();
 
@@ -278,7 +295,7 @@ public class ClickHelperPopup : EditorWindow
         GUILayout.Label(entry.gameObject.name, _labelStyle);
 
         // Arrow indicator if selected
-        if (isSelected)
+        if (isSelected && ClickHelperSettings.ShowComponents)
         {
             Rect arrowRect = new Rect(rowRect.xMax - 20, rowRect.y + (RowHeight - 12) * 0.5f, 12, 12);
             GUI.Label(arrowRect, "\u25B6", EditorStyles.miniLabel);
@@ -382,12 +399,13 @@ public class ClickHelperPopup : EditorWindow
         Event e = Event.current;
         if (e.type != EventType.KeyDown) return;
 
+        bool showComponents = ClickHelperSettings.ShowComponents;
         bool isRightFocus = _hoveredRightIndex != -1;
 
         switch (e.keyCode)
         {
             case KeyCode.DownArrow:
-                if (isRightFocus)
+                if (isRightFocus && showComponents) // Only allow right focus if enabled
                 {
                     if (_selectedLeftIndex >= 0)
                     {
@@ -413,7 +431,7 @@ public class ClickHelperPopup : EditorWindow
                 break;
 
             case KeyCode.UpArrow:
-                if (isRightFocus)
+                if (isRightFocus && showComponents)
                 {
                     _hoveredRightIndex = Mathf.Max(_hoveredRightIndex - 1, 0);
                     ScrollToRightIndex(_hoveredRightIndex);
@@ -437,7 +455,7 @@ public class ClickHelperPopup : EditorWindow
                 break;
                 
             case KeyCode.RightArrow:
-                if (!isRightFocus && _selectedLeftIndex >= 0 && _entries[_selectedLeftIndex].components.Count > 0)
+                if (showComponents && !isRightFocus && _selectedLeftIndex >= 0 && _entries[_selectedLeftIndex].components.Count > 0)
                 {
                     _hoveredRightIndex = 0;
                     Repaint();
@@ -446,7 +464,7 @@ public class ClickHelperPopup : EditorWindow
                 break;
                 
             case KeyCode.LeftArrow:
-                if (isRightFocus)
+                if (showComponents && isRightFocus)
                 {
                     _hoveredRightIndex = -1;
                     Repaint();
@@ -456,7 +474,7 @@ public class ClickHelperPopup : EditorWindow
 
             case KeyCode.Return:
             case KeyCode.KeypadEnter:
-                if (isRightFocus && _selectedLeftIndex >= 0 && _hoveredRightIndex >= 0)
+                if (showComponents && isRightFocus && _selectedLeftIndex >= 0 && _hoveredRightIndex >= 0)
                 {
                     var entry = _entries[_selectedLeftIndex];
                      ConfirmSelection(entry.gameObject);
