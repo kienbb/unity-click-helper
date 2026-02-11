@@ -39,26 +39,30 @@ public class ClickHelperPopup : EditorWindow
     {
         public GameObject gameObject;
         public List<Component> components = new List<Component>();
-        public bool expanded = true;
     }
 
     private List<Entry> _entries;
-    private int _hoveredIndex = -1;
-    private int _totalRows;
-    private Vector2 _scrollPos;
+
+    // State
+    private int _selectedLeftIndex = -1; // Index currently active in Left Panel
+    private int _hoveredRightIndex = -1; // Current mouse hover index in Right Panel
+    
+    private Vector2 _scrollPosLeft;
+    private Vector2 _scrollPosRight;
 
     private const float RowHeight = 22f;
-    private const float WindowWidth = 200f;
-    private const float MaxVisibleRows = 18f;
+    private const float LeftPanelWidth = 220f;
+    private const float RightPanelWidth = 250f;
+    private const float WindowWidth = LeftPanelWidth + RightPanelWidth;
+    private const float MaxVisibleRows = 20f;
     private const float IconSize = 16f;
-    private const float IndentWidth = 20f;
 
     private static GUIStyle _rowStyle;
     private static GUIStyle _rowHoverStyle;
+    private static GUIStyle _rowSelectedStyle;
     private static GUIStyle _labelStyle;
     private static GUIStyle _componentLabelStyle;
-    private static GUIStyle _tagStyle;
-    private static GUIStyle _selectAllStyle;
+    private static GUIStyle _separatorStyle;
 
     public static event Action<GameObject> OnHighlightRequested;
     public static event Action OnHighlightCleared;
@@ -68,15 +72,22 @@ public class ClickHelperPopup : EditorWindow
         var window = CreateInstance<ClickHelperPopup>();
         window.BuildEntries(objects);
 
-        // Calculate initial row count for window sizing
-        int rowCount = 1; // Row "Select All"
-        foreach (var entry in window._entries)
-            rowCount += 1 + (ClickHelperSettings.ShowComponents ? entry.components.Count : 0);
-        
-        // Calculate height based on actual displayed rows
-        float height = Mathf.Min(rowCount, MaxVisibleRows) * RowHeight + 4f;
+        int rowCount = Mathf.Max(objects.Count, 1);
+        if (rowCount < 8) rowCount = 8; // Min height
+
+        float height = Mathf.Min(rowCount, MaxVisibleRows) * RowHeight;
+
+        // Position slightly offset to not cover the mouse immediately if possible
         window.ShowAsDropDown(new Rect(screenPos, Vector2.zero), new Vector2(WindowWidth, height));
         window.Focus();
+
+        // Highlight first item by default if available
+        if (window._entries.Count > 0)
+        {
+            window._selectedLeftIndex = 0;
+            window.PreviewSelection(window._entries[0].gameObject);
+        }
+
         return window;
     }
 
@@ -100,7 +111,6 @@ public class ClickHelperPopup : EditorWindow
                     }
                 }
             }
-
             _entries.Add(entry);
         }
     }
@@ -122,42 +132,45 @@ public class ClickHelperPopup : EditorWindow
         _rowStyle = new GUIStyle(GUIStyle.none)
         {
             padding = new RectOffset(6, 6, 2, 2),
-            fixedHeight = RowHeight
+            fixedHeight = RowHeight,
+            alignment = TextAnchor.MiddleLeft
         };
 
         _rowHoverStyle = new GUIStyle(_rowStyle);
         var hoverTex = new Texture2D(1, 1);
-        hoverTex.SetPixel(0, 0, new Color(0.24f, 0.48f, 0.9f, 0.6f));
+        hoverTex.SetPixel(0, 0, new Color(0.24f, 0.48f, 0.9f, 0.5f));
         hoverTex.Apply();
         _rowHoverStyle.normal.background = hoverTex;
+        _rowHoverStyle.normal.textColor = Color.white;
+
+        _rowSelectedStyle = new GUIStyle(_rowStyle);
+        var selectedTex = new Texture2D(1, 1);
+        selectedTex.SetPixel(0, 0, new Color(0.24f, 0.48f, 0.9f, 0.8f));
+        selectedTex.Apply();
+        _rowSelectedStyle.normal.background = selectedTex;
+        _rowSelectedStyle.normal.textColor = Color.white;
 
         _labelStyle = new GUIStyle(EditorStyles.label)
         {
             fontSize = 12,
             alignment = TextAnchor.MiddleLeft,
-            richText = true
+            richText = true,
+            clipping = TextClipping.Clip
         };
 
         _componentLabelStyle = new GUIStyle(EditorStyles.miniLabel)
         {
             fontSize = 11,
             alignment = TextAnchor.MiddleLeft,
-            normal = { textColor = new Color(0.7f, 0.8f, 0.9f) }
+            padding = new RectOffset(4, 0, 0, 0),
+            normal = { textColor = new Color(0.8f, 0.8f, 0.8f) }
         };
 
-        _tagStyle = new GUIStyle(EditorStyles.miniLabel)
-        {
-            fontSize = 10,
-            alignment = TextAnchor.MiddleRight,
-            normal = { textColor = new Color(0.55f, 0.55f, 0.55f) }
-        };
-
-        _selectAllStyle = new GUIStyle(EditorStyles.miniButton)
-        {
-            fontSize = 11,
-            fixedHeight = RowHeight,
-            alignment = TextAnchor.MiddleCenter
-        };
+        _separatorStyle = new GUIStyle(GUIStyle.none);
+        var sepTex = new Texture2D(1, 1);
+        sepTex.SetPixel(0, 0, new Color(0.1f, 0.1f, 0.1f, 0.5f));
+        sepTex.Apply();
+        _separatorStyle.normal.background = sepTex;
     }
 
     private void OnGUI()
@@ -171,35 +184,57 @@ public class ClickHelperPopup : EditorWindow
         InitStyles();
         HandleKeyboard();
 
-        // Update total rows count
-        _totalRows = 1; // Row "Select All"
-        foreach (var entry in _entries)
-            _totalRows += 1 + (ClickHelperSettings.ShowComponents && entry.expanded ? entry.components.Count : 0);
+        GUILayout.BeginHorizontal();
 
-        _scrollPos = EditorGUILayout.BeginScrollView(_scrollPos);
+        // --- Left Panel: GameObjects ---
+        GUILayout.BeginVertical(GUILayout.Width(LeftPanelWidth));
+        
+        _scrollPosLeft = GUILayout.BeginScrollView(_scrollPosLeft, GUIStyle.none, GUI.skin.verticalScrollbar);
 
         DrawSelectAllRow();
 
-        int flatIndex = 0;
         for (int i = 0; i < _entries.Count; i++)
         {
-            var entry = _entries[i];
-            if (entry.gameObject == null) continue;
-
-            DrawGameObjectRow(entry, flatIndex);
-            flatIndex++;
-
-            if (ClickHelperSettings.ShowComponents && entry.expanded)
-            {
-                for (int j = 0; j < entry.components.Count; j++)
-                {
-                    DrawComponentRow(entry.components[j], entry.gameObject, flatIndex);
-                    flatIndex++;
-                }
-            }
+            DrawLeftPanelRow(i);
         }
 
-        EditorGUILayout.EndScrollView();
+        GUILayout.EndScrollView();
+        GUILayout.EndVertical();
+
+        // Separator Line
+        GUILayout.Box("", _separatorStyle, GUILayout.Width(1), GUILayout.ExpandHeight(true));
+
+        // --- Right Panel: Components ---
+        GUILayout.BeginVertical(GUILayout.ExpandWidth(true));
+        
+        _scrollPosRight = GUILayout.BeginScrollView(_scrollPosRight, GUIStyle.none, GUI.skin.verticalScrollbar);
+
+        if (_selectedLeftIndex >= 0 && _selectedLeftIndex < _entries.Count)
+        {
+            var activeEntry = _entries[_selectedLeftIndex];
+            if (activeEntry.components.Count > 0)
+            {
+                for (int i = 0; i < activeEntry.components.Count; i++)
+                {
+                    DrawRightPanelRow(activeEntry.components[i], activeEntry.gameObject, i);
+                }
+            }
+            else
+            {
+                GUILayout.Space(20);
+                GUILayout.Label("No Components", EditorStyles.centeredGreyMiniLabel);
+            }
+        }
+        else if (_selectedLeftIndex == -1) // Select All
+        {
+            GUILayout.Space(20);
+            GUILayout.Label("Multiple Selection", EditorStyles.centeredGreyMiniLabel);
+        }
+
+        GUILayout.EndScrollView();
+        GUILayout.EndVertical();
+
+        GUILayout.EndHorizontal();
 
         if (Event.current.type == EventType.MouseMove)
             Repaint();
@@ -207,33 +242,29 @@ public class ClickHelperPopup : EditorWindow
 
     private void DrawSelectAllRow()
     {
-        Rect rowRect = EditorGUILayout.BeginHorizontal(_rowStyle, GUILayout.Height(RowHeight));
-
-        if (GUILayout.Button("Select All (" + _entries.Count + ")", _selectAllStyle))
-        {
-            List<UnityEngine.Object> all = new List<UnityEngine.Object>();
-            foreach (var entry in _entries)
-            {
-                if (entry.gameObject != null)
-                    all.Add(entry.gameObject);
-            }
-            Selection.objects = all.ToArray();
-            if (ClickHelperSettings.Behavior == SelectionBehavior.SelectAndFocus)
-                SceneView.lastActiveSceneView?.FrameSelected();
-            Close();
-            return;
-        }
-
-        EditorGUILayout.EndHorizontal();
-    }
-
-    private void DrawGameObjectRow(Entry entry, int flatIndex)
-    {
-        bool isHovered = flatIndex == _hoveredIndex;
-        Rect rowRect = EditorGUILayout.BeginHorizontal(
-            isHovered ? _rowHoverStyle : _rowStyle,
+        bool isSelected = _selectedLeftIndex == -1;
+        
+         Rect rowRect = EditorGUILayout.BeginHorizontal(
+            isSelected ? _rowSelectedStyle : _rowStyle,
             GUILayout.Height(RowHeight));
 
+        GUILayout.Label(" Select All (" + _entries.Count + ")", _labelStyle);
+
+        EditorGUILayout.EndHorizontal();
+
+        HandleRowEvents(rowRect, -1, true);
+    }
+
+    private void DrawLeftPanelRow(int index)
+    {
+        Entry entry = _entries[index];
+        bool isSelected = index == _selectedLeftIndex;
+
+        Rect rowRect = EditorGUILayout.BeginHorizontal(
+            isSelected ? _rowSelectedStyle : _rowStyle,
+            GUILayout.Height(RowHeight));
+
+        // Icon
         var icon = EditorGUIUtility.ObjectContent(entry.gameObject, typeof(GameObject)).image;
         if (icon != null)
         {
@@ -241,41 +272,76 @@ public class ClickHelperPopup : EditorWindow
                 GUILayout.Width(IconSize), GUILayout.Height(IconSize));
             iconRect.y += (RowHeight - IconSize) * 0.5f;
             GUI.DrawTexture(iconRect, icon, ScaleMode.ScaleToFit);
-            GUILayout.Space(2);
         }
 
-        GUILayout.Label(entry.gameObject.name, _labelStyle, GUILayout.ExpandWidth(true));
-        //GUILayout.FlexibleSpace();
-        //GUILayout.Label(GetPrimaryTag(entry.gameObject), _tagStyle);
+        // Name
+        GUILayout.Label(entry.gameObject.name, _labelStyle);
+
+        // Arrow indicator if selected
+        if (isSelected)
+        {
+            Rect arrowRect = new Rect(rowRect.xMax - 20, rowRect.y + (RowHeight - 12) * 0.5f, 12, 12);
+            GUI.Label(arrowRect, "\u25B6", EditorStyles.miniLabel);
+        }
 
         EditorGUILayout.EndHorizontal();
 
-        HandleRowMouse(rowRect, flatIndex, () =>
+        HandleRowEvents(rowRect, index, true);
+    }
+    
+    private void HandleRowEvents(Rect rowRect, int index, bool isLeftPanel)
+    {
+        Event e = Event.current;
+        
+        // Hover Logic
+        if (e.type == EventType.MouseMove && rowRect.Contains(e.mousePosition))
         {
-            OnHighlightRequested?.Invoke(entry.gameObject);
-        }, () =>
+            if (isLeftPanel)
+            {
+                 if (_selectedLeftIndex != index)
+                {
+                    _selectedLeftIndex = index;
+                    _hoveredRightIndex = -1;
+                    
+                    if (index >= 0)
+                        PreviewSelection(_entries[index].gameObject);
+                    else
+                        OnHighlightCleared?.Invoke(); // Clear custom highlight
+                         
+                    Repaint();
+                }
+            }
+            else
+            {
+                if (_hoveredRightIndex != index)
+                {
+                    _hoveredRightIndex = index;
+                    Repaint();
+                }
+            }
+        }
+        
+        // Click Logic
+        if (e.type == EventType.MouseDown && rowRect.Contains(e.mousePosition))
         {
-            if (entry.components.Count > 0)
-                entry.expanded = !entry.expanded;
-
-            Selection.activeGameObject = entry.gameObject;
-            EditorGUIUtility.PingObject(entry.gameObject);
-            if (ClickHelperSettings.Behavior == SelectionBehavior.SelectAndFocus)
-                SceneView.lastActiveSceneView?.FrameSelected();
-            Close();
-        });
+            e.Use();
+            if (isLeftPanel)
+            {
+                if (index == -1) ConfirmSelectAll();
+                else if (index >= 0) ConfirmSelection(_entries[index].gameObject);
+            }
+        }
     }
 
-    private void DrawComponentRow(Component component, GameObject parent, int flatIndex)
+    private void DrawRightPanelRow(Component component, GameObject parent, int index)
     {
         if (component == null) return;
 
-        bool isHovered = flatIndex == _hoveredIndex;
+        bool isHovered = index == _hoveredRightIndex;
+        
         Rect rowRect = EditorGUILayout.BeginHorizontal(
             isHovered ? _rowHoverStyle : _rowStyle,
             GUILayout.Height(RowHeight));
-
-        GUILayout.Space(IndentWidth);
 
         var icon = EditorGUIUtility.ObjectContent(component, component.GetType()).image;
         if (icon != null)
@@ -284,44 +350,30 @@ public class ClickHelperPopup : EditorWindow
                 GUILayout.Width(IconSize), GUILayout.Height(IconSize));
             iconRect.y += (RowHeight - IconSize) * 0.5f;
             GUI.DrawTexture(iconRect, icon, ScaleMode.ScaleToFit);
-            GUILayout.Space(2);
         }
 
-        GUILayout.Label(ObjectNames.NicifyVariableName(component.GetType().Name),
-            _componentLabelStyle, GUILayout.ExpandWidth(true));
+        GUILayout.Label(ObjectNames.NicifyVariableName(component.GetType().Name), _componentLabelStyle);
 
         EditorGUILayout.EndHorizontal();
 
-        HandleRowMouse(rowRect, flatIndex, () =>
+        Event e = Event.current;
+        if (e.type == EventType.MouseMove && rowRect.Contains(e.mousePosition))
         {
-            OnHighlightRequested?.Invoke(parent);
-        }, () =>
-        {
-            Selection.activeGameObject = parent;
-            EditorApplication.delayCall += () =>
+            if (_hoveredRightIndex != index)
             {
-                EditorUtility.OpenPropertyEditor(component);
-            };
-            Close();
-        });
-    }
-
-    private void HandleRowMouse(Rect rect, int flatIndex, Action onHover, Action onClick)
-    {
-        if (Event.current.type == EventType.MouseMove && rect.Contains(Event.current.mousePosition))
-        {
-            if (_hoveredIndex != flatIndex)
-            {
-                _hoveredIndex = flatIndex;
-                onHover?.Invoke();
+                _hoveredRightIndex = index;
                 Repaint();
             }
         }
-
-        if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
+        else if (e.type == EventType.MouseDown && rowRect.Contains(e.mousePosition))
         {
-            Event.current.Use();
-            onClick?.Invoke();
+            e.Use();
+            ConfirmSelection(parent);
+            EditorApplication.delayCall += () =>
+            {
+                // Just use PingObject to flash the object in Hierarchy
+                EditorGUIUtility.PingObject(component);
+            };
         }
     }
 
@@ -330,46 +382,91 @@ public class ClickHelperPopup : EditorWindow
         Event e = Event.current;
         if (e.type != EventType.KeyDown) return;
 
-        int maxIndex = _totalRows - 2;
+        bool isRightFocus = _hoveredRightIndex != -1;
 
         switch (e.keyCode)
         {
             case KeyCode.DownArrow:
-                _hoveredIndex = Mathf.Min(_hoveredIndex + 1, maxIndex);
-                HighlightAtFlatIndex(_hoveredIndex);
-                ScrollToIndex(_hoveredIndex);
+                if (isRightFocus)
+                {
+                    if (_selectedLeftIndex >= 0)
+                    {
+                        var comps = _entries[_selectedLeftIndex].components;
+                        _hoveredRightIndex = Mathf.Min(_hoveredRightIndex + 1, comps.Count - 1);
+                        ScrollToRightIndex(_hoveredRightIndex);
+                    }
+                }
+                else
+                {
+                    int next = Mathf.Min(_selectedLeftIndex + 1, _entries.Count - 1);
+                    if (next != _selectedLeftIndex)
+                    {
+                        _selectedLeftIndex = next;
+                        _hoveredRightIndex = -1;
+                        ScrollToLeftIndex(_selectedLeftIndex);
+                        if (_selectedLeftIndex >= 0)
+                            PreviewSelection(_entries[_selectedLeftIndex].gameObject);
+                    }
+                }
                 e.Use();
                 Repaint();
                 break;
 
             case KeyCode.UpArrow:
-                _hoveredIndex = Mathf.Max(_hoveredIndex - 1, 0);
-                HighlightAtFlatIndex(_hoveredIndex);
-                ScrollToIndex(_hoveredIndex);
+                if (isRightFocus)
+                {
+                    _hoveredRightIndex = Mathf.Max(_hoveredRightIndex - 1, 0);
+                    ScrollToRightIndex(_hoveredRightIndex);
+                }
+                else
+                {
+                    int prev = Mathf.Max(_selectedLeftIndex - 1, -1);
+                    if (prev != _selectedLeftIndex)
+                    {
+                        _selectedLeftIndex = prev;
+                        _hoveredRightIndex = -1;
+                        ScrollToLeftIndex(_selectedLeftIndex);
+                        if (_selectedLeftIndex >= 0)
+                            PreviewSelection(_entries[_selectedLeftIndex].gameObject);
+                        else
+                            OnHighlightCleared?.Invoke();
+                    }
+                }
                 e.Use();
                 Repaint();
+                break;
+                
+            case KeyCode.RightArrow:
+                if (!isRightFocus && _selectedLeftIndex >= 0 && _entries[_selectedLeftIndex].components.Count > 0)
+                {
+                    _hoveredRightIndex = 0;
+                    Repaint();
+                }
+                e.Use();
+                break;
+                
+            case KeyCode.LeftArrow:
+                if (isRightFocus)
+                {
+                    _hoveredRightIndex = -1;
+                    Repaint();
+                }
+                e.Use();
                 break;
 
             case KeyCode.Return:
             case KeyCode.KeypadEnter:
-                if (e.shift)
+                if (isRightFocus && _selectedLeftIndex >= 0 && _hoveredRightIndex >= 0)
                 {
-                    List<UnityEngine.Object> all = new List<UnityEngine.Object>();
-                    foreach (var entry in _entries)
-                    {
-                        if (entry.gameObject != null)
-                            all.Add(entry.gameObject);
-                    }
-                    Selection.objects = all.ToArray();
-                    if (ClickHelperSettings.Behavior == SelectionBehavior.SelectAndFocus)
-                        SceneView.lastActiveSceneView?.FrameSelected();
+                    var entry = _entries[_selectedLeftIndex];
+                     ConfirmSelection(entry.gameObject);
                 }
                 else
                 {
-                    SelectAtFlatIndex(_hoveredIndex);
+                    if (_selectedLeftIndex == -1) ConfirmSelectAll();
+                    else if (_selectedLeftIndex >= 0) ConfirmSelection(_entries[_selectedLeftIndex].gameObject);
                 }
                 e.Use();
-                Close();
                 break;
 
             case KeyCode.Escape:
@@ -379,99 +476,48 @@ public class ClickHelperPopup : EditorWindow
         }
     }
 
-    private void HighlightAtFlatIndex(int flatIndex)
+    private void PreviewSelection(GameObject go)
     {
-        int idx = 0;
-        foreach (var entry in _entries)
-        {
-            if (idx == flatIndex)
-            {
-                OnHighlightRequested?.Invoke(entry.gameObject);
-                return;
-            }
-            idx++;
-            if (entry.expanded)
-            {
-                foreach (var comp in entry.components)
-                {
-                    if (idx == flatIndex)
-                    {
-                        OnHighlightRequested?.Invoke(entry.gameObject);
-                        return;
-                    }
-                    idx++;
-                }
-            }
-        }
+        // Only trigger visual highlight in Scene, do NOT change Selection.activeGameObject
+        OnHighlightRequested?.Invoke(go);
     }
 
-    private void SelectAtFlatIndex(int flatIndex)
+    private void ConfirmSelection(GameObject go)
     {
-        int idx = 0;
-        foreach (var entry in _entries)
-        {
-            if (idx == flatIndex)
-            {
-                Selection.activeGameObject = entry.gameObject;
-                EditorGUIUtility.PingObject(entry.gameObject);
-                if (ClickHelperSettings.Behavior == SelectionBehavior.SelectAndFocus)
-                    SceneView.lastActiveSceneView?.FrameSelected();
-                return;
-            }
-            idx++;
-            if (entry.expanded)
-            {
-                for (int j = 0; j < entry.components.Count; j++)
-                {
-                    if (idx == flatIndex)
-                    {
-                        Selection.activeGameObject = entry.gameObject;
-                        var comp = entry.components[j];
-                        EditorApplication.delayCall += () =>
-                        {
-                            EditorUtility.OpenPropertyEditor(comp);
-                        };
-                        return;
-                    }
-                    idx++;
-                }
-            }
-        }
+        Selection.activeGameObject = go;
+        EditorGUIUtility.PingObject(go);
+        
+        if (ClickHelperSettings.Behavior == SelectionBehavior.SelectAndFocus)
+            SceneView.lastActiveSceneView?.FrameSelected();
+            
+        Close();
     }
 
-    private void ScrollToIndex(int index)
+    private void ConfirmSelectAll()
+    {
+        List<UnityEngine.Object> all = new List<UnityEngine.Object>();
+        foreach (var entry in _entries)
+        {
+            if (entry.gameObject != null)
+                all.Add(entry.gameObject);
+        }
+        Selection.objects = all.ToArray();
+        Close();
+    }
+
+    private void ScrollToLeftIndex(int index)
     {
         float targetY = (index + 1) * RowHeight;
-        float viewHeight = Mathf.Min(_totalRows, MaxVisibleRows) * RowHeight;
-
-        if (targetY < _scrollPos.y)
-            _scrollPos.y = targetY;
-        else if (targetY + RowHeight > _scrollPos.y + viewHeight)
-            _scrollPos.y = targetY + RowHeight - viewHeight;
+        float viewHeight = position.height;
+        if (targetY < _scrollPosLeft.y + RowHeight) _scrollPosLeft.y = Mathf.Max(0, targetY - RowHeight);
+        else if (targetY > _scrollPosLeft.y + viewHeight - RowHeight) _scrollPosLeft.y = targetY - viewHeight + RowHeight;
     }
-
-    private string GetPrimaryTag(GameObject go)
+    
+    private void ScrollToRightIndex(int index)
     {
-        if (go.TryGetComponent<Canvas>(out _)) return "Canvas";
-        if (go.TryGetComponent<Button>(out _)) return "Button";
-        if (go.TryGetComponent<Toggle>(out _)) return "Toggle";
-        if (go.TryGetComponent<Slider>(out _)) return "Slider";
-        if (go.TryGetComponent<Dropdown>(out _)) return "Dropdown";
-        if (go.TryGetComponent<InputField>(out _)) return "InputField";
-        if (go.TryGetComponent<ScrollRect>(out _)) return "ScrollRect";
-        if (go.TryGetComponent<Image>(out _)) return "Image";
-        if (go.TryGetComponent<RawImage>(out _)) return "RawImage";
-        if (go.TryGetComponent<Text>(out _)) return "Text";
-        if (go.TryGetComponent<CanvasRenderer>(out _)) return "UI";
-        if (go.TryGetComponent<RectTransform>(out _) && go.GetComponentInParent<Canvas>() != null)
-            return "UI";
-        if (go.TryGetComponent<SpriteRenderer>(out _)) return "Sprite";
-        if (go.TryGetComponent<SkinnedMeshRenderer>(out _)) return "Skinned Mesh";
-        if (go.TryGetComponent<MeshFilter>(out _)) return "Mesh";
-        if (go.TryGetComponent<Terrain>(out _)) return "Terrain";
-        if (go.TryGetComponent<ParticleSystem>(out _)) return "Particle";
-        if (go.TryGetComponent<Camera>(out _)) return "Camera";
-        if (go.TryGetComponent<Light>(out _)) return "Light";
-        return "";
+         float targetY = index * RowHeight;
+         float viewHeight = position.height;
+         if (targetY < _scrollPosRight.y) _scrollPosRight.y = targetY;
+         else if (targetY > _scrollPosRight.y + viewHeight - RowHeight) _scrollPosRight.y = targetY - viewHeight + RowHeight;
     }
 }
