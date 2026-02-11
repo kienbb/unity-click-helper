@@ -12,5 +12,9 @@
     "author": {
         "name": "kienbb",
         "url": "https://github.com/kienbb"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/kienbb/unity-click-helper.git"
     }
 }
