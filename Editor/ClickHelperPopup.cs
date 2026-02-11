@@ -6,34 +6,7 @@ using UnityEngine.UI;
 
 public class ClickHelperPopup : EditorWindow
 {
-    private static readonly Type[] DetectableTypes = new Type[]
-    {
-        typeof(MeshRenderer),
-        typeof(SkinnedMeshRenderer),
-        typeof(SpriteRenderer),
-        typeof(MeshFilter),
-        typeof(Terrain),
-        typeof(ParticleSystemRenderer),
-        typeof(Collider),
-        typeof(Collider2D),
-        typeof(Canvas),
-        typeof(CanvasRenderer),
-        typeof(RectTransform),
-        typeof(Image),
-        typeof(RawImage),
-        typeof(Text),
-        typeof(Button),
-        typeof(Toggle),
-        typeof(Slider),
-        typeof(Scrollbar),
-        typeof(Dropdown),
-        typeof(InputField),
-        typeof(ScrollRect),
-        typeof(Mask),
-        typeof(RectMask2D),
-        typeof(LayoutGroup),
-        typeof(Graphic),
-    };
+
 
     private class Entry
     {
@@ -107,17 +80,11 @@ public class ClickHelperPopup : EditorWindow
             // Optimization: Only scan for components if the feature is enabled
             if (showComponents)
             {
-                foreach (var type in DetectableTypes)
+                var allComponents = go.GetComponents<Component>();
+                foreach (var c in allComponents)
                 {
-                    if (typeof(Component).IsAssignableFrom(type))
-                    {
-                        var comps = go.GetComponents(type);
-                        foreach (var c in comps)
-                        {
-                            if (c != null && !entry.components.Contains(c))
-                                entry.components.Add(c);
-                        }
-                    }
+                    if (c != null)
+                        entry.components.Add(c);
                 }
             }
             _entries.Add(entry);
