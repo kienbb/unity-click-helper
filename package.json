@@ -1,6 +1,6 @@
 {
     "name": "com.kienbb.click-helper",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "displayName": "Click Helper",
     "description": "A Unity Editor tool to easily select overlapping objects.",
     "unity": "2021.3",
